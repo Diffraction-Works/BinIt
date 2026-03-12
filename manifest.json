@@ -1,0 +1,23 @@
+{
+    "version": "1.0.0",
+    "name": "BinIt - Thought Processing",
+    "short_name": "BinIt",
+    "description": "A mindful thought processing application for releasing or preserving thoughts",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a0a0a",
+    "theme_color": "#0a0a0a",
+    "orientation": "portrait-primary",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>B</text></svg>",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": ["lifestyle", "productivity", "utilities"],
+    "lang": "en-US",
+    "scope": "/",
+    "prefer_related_applications": false
+}
