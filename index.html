@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="BinIt - A mindful thought processing application for releasing or preserving thoughts">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>BinIt | Release Your Thoughts</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>B</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>B</text></svg>">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Nunito+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="background-fluid">
+        <div class="fluid-orb fluid-orb-1"></div>
+        <div class="fluid-orb fluid-orb-2"></div>
+        <div class="fluid-orb fluid-orb-3"></div>
+    </div>
+
+    <!-- Header -->
+    <header class="glass-header">
+        <div class="logo">
+            <h1>BinIt</h1>
+            <span class="logo-tagline">Release • Reflect • Remember</span>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Thought Input Area -->
+        <section class="input-section glass-panel">
+            <h2 class="section-title">Capture Your Thought</h2>
+            <div class="input-container">
+                <textarea 
+                    id="thoughtInput" 
+                    class="thought-textarea" 
+                    placeholder="Write your thought here... Let it go."
+                    maxlength="2000"
+                    aria-label="Write your thought"
+                ></textarea>
+                <div class="input-meta">
+                    <span class="char-count"><span id="charCount">0</span>/2000</span>
+                </div>
+            </div>
+            <div class="input-controls">
+                <div class="retention-selector">
+                    <label for="retentionPeriod">Hold for:</label>
+                    <select id="retentionPeriod" class="glass-select">
+                        <option value="30">1 month</option>
+                        <option value="90">3 months</option>
+                        <option value="180">6 months</option>
+                        <option value="365">1 year</option>
+                    </select>
+                </div>
+                <button id="crumpleBtn" class="crumple-btn">
+                    <span class="btn-text">Crumple & Discard</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Active Thoughts Grid -->
+        <section class="thoughts-section">
+            <h2 class="section-title">Active Thoughts</h2>
+            <div id="activeThoughts" class="thoughts-grid">
+                <!-- Thought cards will be dynamically inserted here -->
+            </div>
+            <div id="emptyActive" class="empty-state hidden">
+                <p>No active thoughts</p>
+                <p class="empty-subtitle">Capture a thought above to begin</p>
+            </div>
+        </section>
+
+        <!-- Trash Can Container -->
+        <div class="trash-container" id="trashContainer">
+            <div class="trash-can" id="trashCan">
+                <div class="trash-lid"></div>
+                <div class="trash-body">
+                    <div class="trash-interior"></div>
+                </div>
+                <div class="trash-count" id="trashCount">0</div>
+            </div>
+            <p class="trash-hint">Drop here to process</p>
+        </div>
+    </main>
+
+    <!-- Tab Navigation -->
+    <nav class="tab-navigation glass-panel">
+        <button class="tab-btn active" data-tab="home">
+            <span class="tab-label">Capture</span>
+        </button>
+        <button class="tab-btn" data-tab="timeline">
+            <span class="tab-label">Timeline</span>
+        </button>
+        <button class="tab-btn" data-tab="pending">
+            <span class="tab-label">Pending</span>
+            <span class="tab-badge hidden" id="pendingBadge">0</span>
+        </button>
+        <button class="tab-btn" data-tab="memorial">
+            <span class="tab-label">Memorial</span>
+        </button>
+    </nav>
+
+    <!-- Tab Content Panels -->
+    <div class="tab-panels" id="tabPanels">
+        <!-- Home/Capture Panel (shown in main-content area) -->
+        <section class="tab-panel" id="homePanel">
+            <!-- Content handled by main-content -->
+        </section>
+
+        <!-- Timeline View -->
+        <section class="tab-panel" id="timelinePanel">
+            <div class="calendar-header">
+                <button class="calendar-nav" id="prevMonth"><</button>
+                <h3 id="currentMonth"></h3>
+                <button class="calendar-nav" id="nextMonth">></button>
+            </div>
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- Calendar days will be generated here -->
+            </div>
+            <div class="calendar-legend">
+                <span class="legend-item"><span class="legend-dot active-dot"></span> Active</span>
+                <span class="legend-item"><span class="legend-dot pending-dot"></span> Pending</span>
+                <span class="legend-item"><span class="legend-dot preserved-dot"></span> Preserved</span>
+            </div>
+        </section>
+
+        <!-- Pending Review Panel -->
+        <section class="tab-panel" id="pendingPanel">
+            <h2 class="section-title">Awaiting Your Decision</h2>
+            <div id="pendingThoughts" class="pending-list">
+                <!-- Pending review thoughts here -->
+             will be inserted</div>
+            <div id="emptyPending" class="empty-state hidden">
+                <p>No thoughts pending review</p>
+                <p class="empty-subtitle">Thoughts will appear here after their retention period</p>
+            </div>
+        </section>
+
+        <!-- Memorial Panel -->
+        <section class="tab-panel" id="memorialPanel">
+            <h2 class="section-title">Cherished Memories</h2>
+            <div id="memorialThoughts" class="memorial-grid">
+                <!-- Preserved memories will be inserted here -->
+            </div>
+            <div id="emptyMemorial" class="empty-state hidden">
+                <p>No preserved memories</p>
+                <p class="empty-subtitle">Thoughts you choose to keep will appear here</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Particle Container (for burning effects) -->
+    <div id="particleContainer" class="particle-container"></div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Service Worker Registration -->
+    <script src="app.js"></script>
+    <script>
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(registration => {
+                        console.log('SW registered:', registration.scope);
+                    })
+                    .catch(error => {
+                        console.log('SW registration failed:', error);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
