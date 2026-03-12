@@ -1,8 +1,8 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Create a report to help us improve BinIt
 title: ''
-labels: ''
+labels: 'bug'
 assignees: ''
 
 ---
@@ -21,18 +21,34 @@ Steps to reproduce the behavior:
 A clear and concise description of what you expected to happen.
 
 **Screenshots**
-If applicable, add screenshots to help explain your problem.
+If applicable, add screenshots or screen recordings to help explain your problem.
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+## PWA-Specific Information
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**Service Worker & Offline**
+- [ ] Issue occurs while offline
+- [ ] Service Worker update failed
+- [ ] Cache not loading properly
+- [ ] Offline mode doesn't work as expected
+
+**IndexedDB & Data Storage**
+- [ ] Thoughts not saving to database
+- [ ] Data not persisting after page reload
+- [ ] Retention period timer not working
+- [ ] Database quota exceeded
+
+**App Features**
+- [ ] Crumpling physics not working
+- [ ] Drag and drop not responsive
+- [ ] Burning particle effects not displaying
+- [ ] Calendar/timeline view issues
+- [ ] Memory/memorial section problems
+
+**Browser & Environment (please complete the following information):**
+- OS: [e.g. Windows 11, macOS, Linux]
+- Browser [e.g. Chrome, Firefox, Safari, Edge]
+- Browser Version: [e.g. 120.0]
+- PWA Installation Status: [Not installed / Installed as PWA]
 
 **Additional context**
 Add any other context about the problem here.
