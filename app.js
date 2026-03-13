@@ -11,6 +11,34 @@ const DB_VERSION = 1;
 const STORE_NAME = 'thoughts';
 const LOCALSTORAGE_KEY = 'binit-thoughts';
 
+// ============================================
+// Magic Numbers as Constants
+// ============================================
+const TIMING = {
+    ANIMATION_DELAY: 400,          // Card swallow animation duration
+    PARTICLE_REMOVAL: 2000,         // Particle CSS animation duration
+    TOAST_DURATION: 3000,           // Default toast display duration
+    TOAST_FADE_OUT: 300,            // Toast fade out duration
+    BURN_ANIMATION: 500,            // Burn animation duration
+    DRAG_IMAGE_DELAY: 0
+};
+
+const PARTICLE = {
+    DEFAULT_COUNT: 40,
+    BURN_COUNT: 50,
+    MIN_SIZE: 4,
+    MAX_SIZE: 12,
+    MIN_VELOCITY: 50,
+    MAX_VELOCITY: 200,
+    GRAY_MIN: 100,
+    GRAY_MAX: 200
+};
+
+const TEXT = {
+    TRUNCATE_LENGTH: 100,
+    MAX_INPUT_LENGTH: 500
+};
+
 // Status enum
 const Status = {
     ACTIVE: 'active',
@@ -20,12 +48,88 @@ const Status = {
 };
 
 // ============================================
+// Centralized Data Cache (Issue #5 Fix)
+// ============================================
+const DataCache = {
+    _cache: null,
+    _cacheTimestamp: 0,
+    CACHE_TTL: 5000, // 5 seconds cache TTL
+    
+    async getThoughts() {
+        const now = Date.now();
+        if (this._cache && (now - this._cacheTimestamp) < this.CACHE_TTL) {
+            return this._cache;
+        }
+        
+        const thoughts = await getAllThoughts();
+        this._cache = thoughts;
+        this._cacheTimestamp = now;
+        return thoughts;
+    },
+    
+    invalidate() {
+        this._cache = null;
+        this._cacheTimestamp = 0;
+    },
+    
+    async getByStatus(status) {
+        const all = await this.getThoughts();
+        return all.filter(t => t.status === status);
+    },
+    
+    async findById(id) {
+        const all = await this.getThoughts();
+        return all.find(t => t.id === id);
+    }
+};
+
+// ============================================
+// Loading State Manager (Issue #11 Fix)
+// ============================================
+const LoadingState = {
+    _states: {},
+    
+    set(key, isLoading) {
+        this._states[key] = isLoading;
+        this._updateUI();
+    },
+    
+    isLoading(key) {
+        return this._states[key] || false;
+    },
+    
+    _updateUI() {
+        const anyLoading = Object.values(this._states).some(v => v);
+        document.body.classList.toggle('loading', anyLoading);
+    },
+    
+    async wrap(key, promise) {
+        this.set(key, true);
+        try {
+            return await promise;
+        } finally {
+            this.set(key, false);
+        }
+    }
+};
+
+// ============================================
+// Keyboard Drag State (Issue #12 Fix)
+// ============================================
+const KeyboardDragState = {
+    active: false,
+    currentCard: null,
+    targetZone: null
+};
+
+// ============================================
 // State Management
 // ============================================
 let db = null;
 let useIndexedDB = true;
 let currentMonth = new Date();
 let thoughts = [];
+let dragCompleted = false; // Issue #7: Track if drag was successful
 
 // DOM Elements
 const elements = {
@@ -222,6 +326,12 @@ function saveToLocalStorage() {
         localStorage.setItem(LOCALSTORAGE_KEY, JSON.stringify(thoughts));
     } catch (e) {
         console.error('Failed to save to localStorage:', e);
+        // Issue #10: User-visible error notification for localStorage failures
+        if (e.name === 'QuotaExceededError') {
+            showToast('Storage full! Please preserve or burn some thoughts to continue saving.');
+        } else {
+            showToast('Failed to save data. Your changes may not persist.');
+        }
     }
 }
 
@@ -251,7 +361,8 @@ function getDaysUntil(timestamp) {
     return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
-function truncateText(text, maxLength = 100) {
+// Issue #9 Fix: Use TEXT constants
+function truncateText(text, maxLength = TEXT.TRUNCATE_LENGTH) {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + '...';
 }
@@ -262,10 +373,23 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+/**
+ * Escapes special CSS selector characters to prevent XSS in querySelector
+ * Uses CSS.escape() if available, with fallback for older browsers
+ */
+function escapeCssSelector(value) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+        return CSS.escape(value);
+    }
+    // Manual fallback for older browsers
+    return value.replace(/(["'\[\]\(\)=~\|\^\$\*\?\+\@:\.\/\\ ])/g, '\\$1');
+}
+
 // ============================================
 // Toast Notifications
 // ============================================
-function showToast(message, duration = 3000) {
+// Issue #11 Fix: Enhanced toast with loading state support
+function showToast(message, duration = TIMING.TOAST_DURATION) {
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.textContent = message;
@@ -273,28 +397,45 @@ function showToast(message, duration = 3000) {
     
     setTimeout(() => {
         toast.classList.add('fade-out');
-        setTimeout(() => toast.remove(), 300);
+        setTimeout(() => toast.remove(), TIMING.TOAST_FADE_OUT);
     }, duration);
+}
+
+// Issue #11 Fix: Loading toast for async operations
+function showLoadingToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast loading-toast';
+    toast.innerHTML = `<span class="loading-spinner"></span>${message}`;
+    elements.toastContainer.appendChild(toast);
+    return toast;
+}
+
+function hideLoadingToast(toast) {
+    if (toast) {
+        toast.classList.add('fade-out');
+        setTimeout(() => toast.remove(), TIMING.TOAST_FADE_OUT);
+    }
 }
 
 // ============================================
 // Particle Effects
 // ============================================
-function createParticles(x, y, count = 40) {
+// Issue #9 Fix: Use constants for magic numbers
+function createParticles(x, y, count = PARTICLE.DEFAULT_COUNT) {
     const container = elements.particleContainer;
     
     for (let i = 0; i < count; i++) {
         const particle = document.createElement('div');
         particle.className = 'particle';
         
-        const size = Math.random() * 8 + 4;
+        const size = Math.random() * (PARTICLE.MAX_SIZE - PARTICLE.MIN_SIZE) + PARTICLE.MIN_SIZE;
         const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
-        const velocity = Math.random() * 150 + 50;
+        const velocity = Math.random() * (PARTICLE.MAX_VELOCITY - PARTICLE.MIN_VELOCITY) + PARTICLE.MIN_VELOCITY;
         const tx = Math.cos(angle) * velocity;
         const ty = Math.sin(angle) * velocity - 100;
         
         // Grayscale colors
-        const gray = Math.floor(Math.random() * 100 + 100);
+        const gray = Math.floor(Math.random() * (PARTICLE.GRAY_MAX - PARTICLE.GRAY_MIN) + PARTICLE.GRAY_MIN);
         const color = `rgb(${gray}, ${gray}, ${gray})`;
         
         particle.style.cssText = `
@@ -309,18 +450,22 @@ function createParticles(x, y, count = 40) {
         
         container.appendChild(particle);
         
-        setTimeout(() => particle.remove(), 2000);
+        setTimeout(() => particle.remove(), TIMING.PARTICLE_REMOVAL);
     }
 }
 
 // ============================================
 // Thought Card Rendering
 // ============================================
+// Issue #12 Fix: Add keyboard support for drag & drop
 function createThoughtCard(thought) {
     const card = document.createElement('div');
     card.className = 'thought-card';
     card.dataset.id = thought.id;
     card.draggable = true;
+    card.tabIndex = 0; // Make focusable for keyboard
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `Thought: ${truncateText(thought.text, 50)}`);
     
     const daysUntil = getDaysUntil(thought.destructionDate);
     const daysText = daysUntil > 0 
@@ -344,13 +489,112 @@ function createThoughtCard(thought) {
     card.addEventListener('dragstart', handleDragStart);
     card.addEventListener('dragend', handleDragEnd);
     
+    // Issue #12 Fix: Keyboard events for accessibility
+    card.addEventListener('keydown', handleCardKeyDown);
+    
     return card;
 }
 
-function renderActiveThoughts() {
-    elements.activeThoughts.innerHTML = '';
+// Issue #12 Fix: Keyboard handler for drag & drop
+function handleCardKeyDown(e) {
+    const card = e.target.closest('.thought-card');
+    if (!card) return;
     
-    getThoughtsByStatus(Status.ACTIVE).then(activeThoughts => {
+    const thoughtId = card.dataset.id;
+    
+    switch (e.key) {
+        case 'Enter':
+        case ' ':
+            e.preventDefault();
+            if (!KeyboardDragState.active) {
+                // Start keyboard drag mode
+                startKeyboardDrag(card, thoughtId);
+            } else {
+                // Complete keyboard drag
+                completeKeyboardDrag(thoughtId);
+            }
+            break;
+        case 'Escape':
+            if (KeyboardDragState.active) {
+                cancelKeyboardDrag();
+            }
+            break;
+        case 'ArrowRight':
+        case 'ArrowLeft':
+        case 'ArrowUp':
+        case 'ArrowDown':
+            if (KeyboardDragState.active) {
+                e.preventDefault();
+                moveKeyboardDrag(card, e.key);
+            }
+            break;
+    }
+}
+
+// Issue #12 Fix: Start keyboard drag mode
+function startKeyboardDrag(card, thoughtId) {
+    KeyboardDragState.active = true;
+    KeyboardDragState.currentCard = card;
+    card.classList.add('keyboard-dragging');
+    
+    // Show trash container during keyboard drag
+    elements.trashContainer.classList.remove('hidden');
+    
+    showToast('Use arrow keys to move. Press Enter to drop in trash.');
+}
+
+// Issue #12 Fix: Move card with keyboard
+function moveKeyboardDrag(card, direction) {
+    const trashZone = elements.trashContainer;
+    
+    if (direction === 'ArrowRight' || direction === 'ArrowDown') {
+        trashZone.classList.add('hovering');
+        trashZone.classList.add('keyboard-target');
+        KeyboardDragState.targetZone = 'trash';
+    } else {
+        trashZone.classList.remove('hovering');
+        trashZone.classList.remove('keyboard-target');
+        KeyboardDragState.targetZone = null;
+    }
+}
+
+// Issue #12 Fix: Complete keyboard drag
+async function completeKeyboardDrag(thoughtId) {
+    cancelKeyboardDrag();
+    
+    const card = document.querySelector(`.thought-card[data-id="${escapeCssSelector(thoughtId)}"]`);
+    if (card && KeyboardDragState.targetZone === 'trash') {
+        // Simulate drop into trash
+        await handleTrashDrop(thoughtId, card);
+    }
+}
+
+// Issue #12 Fix: Cancel keyboard drag
+function cancelKeyboardDrag() {
+    if (KeyboardDragState.currentCard) {
+        KeyboardDragState.currentCard.classList.remove('keyboard-dragging');
+    }
+    
+    elements.trashContainer.classList.remove('hovering');
+    elements.trashContainer.classList.remove('keyboard-target');
+    
+    KeyboardDragState.active = false;
+    KeyboardDragState.currentCard = null;
+    KeyboardDragState.targetZone = null;
+    
+    // Hide trash container when drag is cancelled
+    elements.trashContainer.classList.add('hidden');
+}
+
+// Issue #5 Fix: Use DataCache to avoid redundant database queries
+// Issue #8 Fix: Standardize to async/await pattern
+async function renderActiveThoughts() {
+    elements.activeThoughts.innerHTML = '';
+    LoadingState.set('activeThoughts', true);
+    
+    try {
+        const activeThoughts = await DataCache.getByStatus(Status.ACTIVE);
+        
         if (activeThoughts.length === 0) {
             elements.emptyActive.classList.remove('hidden');
         } else {
@@ -359,7 +603,12 @@ function renderActiveThoughts() {
                 elements.activeThoughts.appendChild(createThoughtCard(thought));
             });
         }
-    });
+    } catch (error) {
+        console.error('Failed to render active thoughts:', error);
+        showToast('Failed to load thoughts');
+    } finally {
+        LoadingState.set('activeThoughts', false);
+    }
 }
 
 // ============================================
@@ -394,6 +643,7 @@ function handleDragStart(e) {
     }, 0);
 }
 
+// Issue #7 Fix: Only hide trash container after successful drop
 function handleDragEnd(e) {
     if (!draggedCard) return;
     
@@ -403,8 +653,12 @@ function handleDragEnd(e) {
     elements.trashContainer.classList.remove('hovering');
     elements.trashCan.classList.remove('drag-over');
     
-    // Hide trash container when drag ends
-    elements.trashContainer.classList.add('hidden');
+    // Issue #7 Fix: Only hide trash container if drag was NOT completed successfully
+    // The dragCompleted flag is set to true in the drop handler before hiding
+    if (!dragCompleted) {
+        elements.trashContainer.classList.add('hidden');
+    }
+    dragCompleted = false; // Reset for next drag
 }
 
 // ============================================
@@ -426,7 +680,8 @@ function initTrashCan() {
         trashCan.classList.remove('drag-over');
     });
     
-    trashCan.addEventListener('drop', async (e) => {
+    // Issue #3 & #7 Fix: Proper async handling and drag completion tracking
+trashCan.addEventListener('drop', async (e) => {
         e.preventDefault();
         container.classList.remove('hovering');
         trashCan.classList.remove('drag-over');
@@ -434,11 +689,12 @@ function initTrashCan() {
         const thoughtId = e.dataTransfer.getData('text/plain');
         if (!thoughtId) return;
         
-        const card = document.querySelector(`.thought-card[data-id="${thoughtId}"]`);
+        const card = document.querySelector(`.thought-card[data-id="${escapeCssSelector(thoughtId)}"]`);
         if (card) {
             // Animate swallow
             card.classList.add('swallowed');
             
+            // Issue #3 Fix: Use TIMING constant and proper async flow
             setTimeout(async () => {
                 // Fetch thought inside setTimeout to avoid stale data
                 const allThoughts = await getAllThoughts();
@@ -446,49 +702,117 @@ function initTrashCan() {
                 
                 if (thought) {
                     try {
+                        // Issue #3 Fix: Wait for database update BEFORE removing DOM
                         thought.status = Status.PENDING_REVIEW;
                         await updateThought(thought);
+                        
+                        // Issue #7 Fix: Mark drag as completed before DOM removal
+                        dragCompleted = true;
+                        
+                        // Invalidate cache after successful update
+                        DataCache.invalidate();
                         
                         showToast('Thought moved to trash');
                         renderActiveThoughts();
                         updateTrashCount();
                         checkPendingReviews();
                         
-                        // Only remove card from DOM after successful update
+                        // Only remove card from DOM after successful database update
                         card.remove();
                     } catch (error) {
                         console.error('Failed to move thought to trash:', error);
                         showToast('Failed to move thought to trash');
+                        // Issue #3 Fix: Restore card appearance on failure
                         card.classList.remove('swallowed');
+                        // Hide trash container on failure
+                        elements.trashContainer.classList.add('hidden');
                     }
                 }
-            }, 400);
+            }, TIMING.ANIMATION_DELAY);
         }
     });
+    
+    // Issue #3 Fix: Extract trash drop logic for reuse (keyboard support)
+    async function handleTrashDrop(thoughtId, card) {
+        card.classList.add('swallowed');
+        
+        setTimeout(async () => {
+            const allThoughts = await getAllThoughts();
+            const thought = allThoughts.find(t => t.id === thoughtId);
+            
+            if (thought) {
+                try {
+                    thought.status = Status.PENDING_REVIEW;
+                    await updateThought(thought);
+                    
+                    dragCompleted = true;
+                    DataCache.invalidate();
+                    
+                    showToast('Thought moved to trash');
+                    renderActiveThoughts();
+                    updateTrashCount();
+                    checkPendingReviews();
+                    
+                    card.remove();
+                } catch (error) {
+                    console.error('Failed to move thought to trash:', error);
+                    showToast('Failed to move thought to trash');
+                    card.classList.remove('swallowed');
+                    elements.trashContainer.classList.add('hidden');
+                }
+            }
+        }, TIMING.ANIMATION_DELAY);
+    }
 }
 
+// Issue #5 & #8 Fix: Use DataCache and async/await
 async function updateTrashCount() {
-    const pending = await getThoughtsByStatus(Status.PENDING_REVIEW);
-    elements.trashCount.textContent = pending.length;
-    elements.trashCount.style.display = pending.length > 0 ? 'flex' : 'none';
+    try {
+        const pending = await DataCache.getByStatus(Status.PENDING_REVIEW);
+        elements.trashCount.textContent = pending.length;
+        elements.trashCount.style.display = pending.length > 0 ? 'flex' : 'none';
+    } catch (error) {
+        console.error('Failed to update trash count:', error);
+    }
 }
 
 // ============================================
 // Pending Review Management
 // ============================================
+// Issue #4 Fix: Batch update using single IndexedDB transaction
 async function checkPendingReviews() {
-    const all = await getAllThoughts();
     const now = Date.now();
     
-    // Auto-update status for thoughts past destruction date
-    for (const thought of all) {
-        if (thought.status === Status.ACTIVE && thought.destructionDate <= now) {
-            thought.status = Status.PENDING_REVIEW;
-            try {
-                await updateThought(thought);
-            } catch (error) {
-                console.error('Failed to update thought:', error);
+    // Issue #5 Fix: Use DataCache for consistent data access
+    const all = await DataCache.getThoughts();
+    const thoughtsToUpdate = all.filter(
+        thought => thought.status === Status.ACTIVE && thought.destructionDate <= now
+    );
+    
+    if (thoughtsToUpdate.length > 0) {
+        try {
+            if (useIndexedDB) {
+                // Issue #4 Fix: Use single transaction for batch update
+                await batchUpdateThoughts(thoughtsToUpdate.map(t => ({
+                    ...t,
+                    status: Status.PENDING_REVIEW
+                })));
+            } else {
+                // localStorage fallback: update in memory and save once
+                for (const thought of thoughtsToUpdate) {
+                    const index = thoughts.findIndex(t => t.id === thought.id);
+                    if (index !== -1) {
+                        thoughts[index].status = Status.PENDING_REVIEW;
+                    }
+                }
+                saveToLocalStorage();
             }
+            
+            // Invalidate cache after batch update
+            DataCache.invalidate();
+        } catch (error) {
+            console.error('Failed to batch update thoughts:', error);
+            showToast('Some thoughts failed to update');
         }
     }
     
@@ -497,17 +821,59 @@ async function checkPendingReviews() {
     renderCalendar();
 }
 
-function updatePendingBadge() {
-    getThoughtsByStatus(Status.PENDING_REVIEW).then(pending => {
-        elements.pendingBadge.textContent = pending.length;
-        elements.pendingBadge.classList.toggle('hidden', pending.length === 0);
+// Issue #4 Fix: Batch update multiple thoughts in single transaction
+async function batchUpdateThoughts(thoughtsToUpdate) {
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        
+        let completed = 0;
+        let hasError = false;
+        
+        transaction.oncomplete = () => {
+            if (!hasError) resolve();
+        };
+        
+        transaction.onerror = () => {
+            hasError = true;
+            reject(transaction.error);
+        };
+        
+        for (const thought of thoughtsToUpdate) {
+            const request = store.put(thought);
+            request.onsuccess = () => {
+                completed++;
+                if (completed === thoughtsToUpdate.length && !hasError) {
+                    resolve();
+                }
+            };
+            request.onerror = () => {
+                hasError = true;
+                reject(request.error);
+            };
+        }
     });
 }
 
-function renderPendingReviews() {
+// Issue #5 & #8 Fix: Use DataCache and async/await
+async function updatePendingBadge() {
+    try {
+        const pending = await DataCache.getByStatus(Status.PENDING_REVIEW);
+        elements.pendingBadge.textContent = pending.length;
+        elements.pendingBadge.classList.toggle('hidden', pending.length === 0);
+    } catch (error) {
+        console.error('Failed to update pending badge:', error);
+    }
+}
+
+// Issue #5 & #8 Fix: Use DataCache and async/await
+async function renderPendingReviews() {
     elements.pendingThoughts.innerHTML = '';
+    LoadingState.set('pendingReviews', true);
     
-    getThoughtsByStatus(Status.PENDING_REVIEW).then(pending => {
+    try {
+        const pending = await DataCache.getByStatus(Status.PENDING_REVIEW);
+        
         if (pending.length === 0) {
             elements.emptyPending.classList.remove('hidden');
         } else {
@@ -539,54 +905,91 @@ function renderPendingReviews() {
                 elements.pendingThoughts.appendChild(item);
             });
         }
-    });
+    } catch (error) {
+        console.error('Failed to render pending reviews:', error);
+        showToast('Failed to load pending reviews');
+    } finally {
+        LoadingState.set('pendingReviews', false);
+    }
 }
 
+// Issue #8 & #9 Fix: Use async/await and constants
 async function burnThought(id, element) {
     const rect = element.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
     
-    // Create particles
-    createParticles(x, y, 50);
+    // Create particles - Issue #9 Fix: Use constant
+    createParticles(x, y, PARTICLE.BURN_COUNT);
     
-    // Fade out element
-    element.style.transition = 'opacity 0.5s, transform 0.5s';
+    // Fade out element - Issue #9 Fix: Use constant
+    element.style.transition = `opacity ${TIMING.BURN_ANIMATION}ms, transform ${TIMING.BURN_ANIMATION}ms`;
     element.style.opacity = '0';
     element.style.transform = 'scale(0.8)';
     
+    // Issue #11 Fix: Show loading state
+    const loadingToast = showLoadingToast('Burning thought...');
+    
     setTimeout(async () => {
-        await deleteThought(id);
-        showToast('Thought burned - released forever');
-        renderPendingReviews();
-        updateTrashCount();
-        renderMemorial();
-    }, 500);
+        try {
+            await deleteThought(id);
+            DataCache.invalidate();
+            CalendarCache.invalidate();
+            
+            hideLoadingToast(loadingToast);
+            showToast('Thought burned - released forever');
+            renderPendingReviews();
+            updateTrashCount();
+            renderMemorial();
+        } catch (error) {
+            hideLoadingToast(loadingToast);
+            console.error('Failed to burn thought:', error);
+            showToast('Failed to burn thought');
+            element.style.opacity = '1';
+            element.style.transform = 'scale(1)';
+        }
+    }, TIMING.BURN_ANIMATION);
 }
 
+// Issue #5 & #8 Fix: Use DataCache and async/await
 async function preserveThought(id, element) {
-    const all = await getAllThoughts();
-    const thought = all.find(t => t.id === id);
+    LoadingState.set('preserve', true);
     
-    if (thought) {
-        thought.status = Status.PRESERVED;
-        thought.preservedAt = Date.now();
-        await updateThought(thought);
+    try {
+        const thought = await DataCache.findById(id);
         
-        showToast('Thought preserved as memory');
-        renderPendingReviews();
-        renderMemorial();
-        updateTrashCount();
+        if (thought) {
+            thought.status = Status.PRESERVED;
+            thought.preservedAt = Date.now();
+            await updateThought(thought);
+            
+            DataCache.invalidate();
+            CalendarCache.invalidate();
+            
+            showToast('Thought preserved as memory');
+            renderPendingReviews();
+            renderMemorial();
+            updateTrashCount();
+        }
+    } catch (error) {
+        console.error('Failed to preserve thought:', error);
+        showToast('Failed to preserve thought');
+    } finally {
+        LoadingState.set('preserve', false);
     }
 }
 
 // ============================================
 // Memorial Section
 // ============================================
-function renderMemorial() {
+// Issue #5 & #8 Fix: Use DataCache and async/await
+async function renderMemorial() {
     elements.memorialThoughts.innerHTML = '';
+    LoadingState.set('memorial', true);
     
-    getThoughtsByStatus(Status.PRESERVED).then(memories => {
+    try {
+        const memories = await DataCache.getByStatus(Status.PRESERVED);
+        
         if (memories.length === 0) {
             elements.emptyMemorial.classList.remove('hidden');
         } else {
@@ -605,6 +1008,7 @@ function renderMemorial() {
                 card.querySelector('.memory-delete').addEventListener('click', async () => {
                     if (confirm('Permanently delete this memory?')) {
                         await deleteThought(thought.id);
+                        DataCache.invalidate();
                         renderMemorial();
                         showToast('Memory deleted');
                     }
@@ -613,15 +1017,49 @@ function renderMemorial() {
                 elements.memorialThoughts.appendChild(card);
             });
         }
-    });
+    } catch (error) {
+        console.error('Failed to render memorial:', error);
+        showToast('Failed to load memories');
+    } finally {
+        LoadingState.set('memorial', false);
+    }
 }
 
 // ============================================
 // Calendar/Timeline View
 // ============================================
-function renderCalendar() {
+
+// Issue #6 Fix: Calendar memoization cache
+const CalendarCache = {
+    _cache: new Map(),
+    
+    _getKey(year, month) {
+        return `${year}-${month}`;
+    },
+    
+    get(year, month) {
+        return this._cache.get(this._getKey(year, month));
+    },
+    
+    set(year, month, html) {
+        // Limit cache size to 12 months
+        if (this._cache.size >= 12) {
+            const firstKey = this._cache.keys().next().value;
+            this._cache.delete(firstKey);
+        }
+        this._cache.set(this._getKey(year, month), html);
+    },
+    
+    invalidate() {
+        this._cache.clear();
+    }
+};
+
+// Issue #5, #6, #8 Fix: Use DataCache, memoization, and async/await
+async function renderCalendar() {
     const year = currentMonth.getFullYear();
     const month = currentMonth.getMonth();
+    const cacheKey = CalendarCache._getKey(year, month);
     
     // Update header
     elements.currentMonth.textContent = new Date(year, month).toLocaleDateString('en-US', {
@@ -629,8 +1067,20 @@ function renderCalendar() {
         year: 'numeric'
     });
     
-    // Get all thoughts
-    getAllThoughts().then(allThoughts => {
+    LoadingState.set('calendar', true);
+    
+    try {
+        // Issue #6 Fix: Check cache first
+        const cachedHtml = CalendarCache.get(year, month);
+        if (cachedHtml) {
+            elements.calendarGrid.innerHTML = cachedHtml;
+            LoadingState.set('calendar', false);
+            return;
+        }
+        
+        // Get all thoughts using cache
+        const allThoughts = await DataCache.getThoughts();
+        
         const firstDay = new Date(year, month, 1);
         const lastDay = new Date(year, month + 1, 0);
         const startDay = firstDay.getDay();
@@ -694,8 +1144,15 @@ function renderCalendar() {
             }
         }
         
+        // Issue #6 Fix: Cache the rendered HTML
+        CalendarCache.set(year, month, html);
         elements.calendarGrid.innerHTML = html;
-    });
+    } catch (error) {
+        console.error('Failed to render calendar:', error);
+        showToast('Failed to load calendar');
+    } finally {
+        LoadingState.set('calendar', false);
+    }
 }
 
 function isSameDay(date1, date2) {
@@ -707,12 +1164,13 @@ function isSameDay(date1, date2) {
 // ============================================
 // Tab Navigation
 // ============================================
+// Issue #8 Fix: Standardize to async/await
 function initTabs() {
     const mainContent = document.querySelector('.main-content');
     const tabPanelsContainer = document.getElementById('tabPanels');
     
     elements.tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const tab = btn.dataset.tab;
             
             // Update buttons
@@ -761,14 +1219,28 @@ function initInput() {
             return;
         }
         
-        await createThought(text, retention);
+        // Issue #11 Fix: Show loading state
+        const loadingToast = showLoadingToast('Capturing thought...');
         
-        // Reset input
-        elements.thoughtInput.value = '';
-        elements.charCount.textContent = '0';
-        
-        showToast('Thought captured and discarded');
-        renderActiveThoughts();
+        try {
+            await createThought(text, retention);
+            
+            // Invalidate caches after creating new thought
+            DataCache.invalidate();
+            CalendarCache.invalidate();
+            
+            // Reset input
+            elements.thoughtInput.value = '';
+            elements.charCount.textContent = '0';
+            
+            hideLoadingToast(loadingToast);
+            showToast('Thought captured and discarded');
+            renderActiveThoughts();
+        } catch (error) {
+            hideLoadingToast(loadingToast);
+            console.error('Failed to create thought:', error);
+            showToast('Failed to capture thought');
+        }
     });
 }
 
@@ -778,11 +1250,13 @@ function initInput() {
 function initCalendarNav() {
     elements.prevMonth.addEventListener('click', () => {
         currentMonth.setMonth(currentMonth.getMonth() - 1);
+        // Issue #6 Fix: Calendar will use cache if available
         renderCalendar();
     });
     
     elements.nextMonth.addEventListener('click', () => {
         currentMonth.setMonth(currentMonth.getMonth() + 1);
+        // Issue #6 Fix: Calendar will use cache if available
         renderCalendar();
     });
 }
@@ -793,27 +1267,43 @@ function initCalendarNav() {
 async function init() {
     console.log('Initializing BinIt...');
     
-    // Initialize database
-    await initDatabase();
+    // Issue #11 Fix: Show initial loading state
+    const initLoadingToast = showLoadingToast('Loading BinIt...');
     
-    // Check for pending reviews (auto-update status)
-    await checkPendingReviews();
-    
-    // Initialize UI components
-    initInput();
-    initTabs();
-    initTrashCan();
-    initCalendarNav();
-    
-    // Hide trash container by default (only shown during drag)
-    elements.trashContainer.classList.add('hidden');
-    
-    // Initial renders
-    renderActiveThoughts();
-    renderCalendar();
-    updateTrashCount();
-    
-    console.log('BinIt ready!');
+    try {
+        // Initialize database
+        await initDatabase();
+        
+        // Invalidate all caches on init
+        DataCache.invalidate();
+        CalendarCache.invalidate();
+        
+        // Check for pending reviews (auto-update status)
+        await checkPendingReviews();
+        
+        // Initialize UI components
+        initInput();
+        initTabs();
+        initTrashCan();
+        initCalendarNav();
+        
+        // Hide trash container by default (only shown during drag)
+        elements.trashContainer.classList.add('hidden');
+        
+        // Initial renders
+        await Promise.all([
+            renderActiveThoughts(),
+            renderCalendar(),
+            updateTrashCount()
+        ]);
+        
+        hideLoadingToast(initLoadingToast);
+        console.log('BinIt ready!');
+    } catch (error) {
+        hideLoadingToast(initLoadingToast);
+        console.error('Failed to initialize BinIt:', error);
+        showToast('Failed to initialize app. Please refresh.');
+    }
 }
 
 // Start app when DOM is ready
